@@ -4,11 +4,11 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 })
 
-function buildPrompt({ goal, vibe, items }) {
+function buildPrompt({ goal, vibe, items, styleProfile }) {
   const safeGoal = goal && goal.trim().length ? goal.trim() : 'everyday wear'
   const safeVibe = vibe && vibe.trim().length ? vibe.trim() : 'casual but put-together'
 
-  const lines = items
+  const lines = (items || [])
     .map((it, idx) => {
       const name = it.name || it.category || `Item ${idx + 1}`
       const cat = it.category ? `(${it.category})` : ''
@@ -18,8 +18,28 @@ function buildPrompt({ goal, vibe, items }) {
     })
     .join('\n')
 
+  let profileBlock = ''
+  if (styleProfile) {
+    const parts = []
+    if (Array.isArray(styleProfile.goals) && styleProfile.goals.length) {
+      parts.push(`often dressing for: ${styleProfile.goals.join(', ')}`)
+    }
+    if (Array.isArray(styleProfile.vibes) && styleProfile.vibes.length) {
+      parts.push(`prefers vibes: ${styleProfile.vibes.join(', ')}`)
+    }
+    if (Array.isArray(styleProfile.categories) && styleProfile.categories.length) {
+      parts.push(`frequently uses categories: ${styleProfile.categories.join(', ')}`)
+    }
+    if (Array.isArray(styleProfile.colors) && styleProfile.colors.length) {
+      parts.push(`leans toward colors: ${styleProfile.colors.join(', ')}`)
+    }
+    if (parts.length) {
+      profileBlock = '\n\nUser style summary: ' + parts.join('. ') + '.'
+    }
+  }
+
   return `
-You are a modern, neutral fashion stylist. Give clear, realistic outfit guidance the user can wear in everyday life.
+You are a modern, neutral fashion stylist. Give clear, realistic outfit guidance the user can wear in everyday life.${profileBlock}
 
 Goal: ${safeGoal}
 Vibe: ${safeVibe}
@@ -55,11 +75,11 @@ function trimSentenceWords(sentence, maxWords = 22) {
   const words = sentence.split(/\s+/)
   if (words.length <= maxWords) return sentence
   const cut = words.slice(0, maxWords).join(' ')
-  return cut.replace(/[.,;:!?]*$/, '') + '…'
+  return cut.replace(/[.,;:!?]*$/, '') + '...'
 }
 
-export async function getStyleSuggestionsLLM({ goal, vibe, items }) {
-  const prompt = buildPrompt({ goal, vibe, items })
+export async function getStyleSuggestionsLLM({ goal, vibe, items, styleProfile }) {
+  const prompt = buildPrompt({ goal, vibe, items, styleProfile })
 
   const completion = await client.chat.completions.create({
     model: 'gpt-4o-mini',

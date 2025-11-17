@@ -1,6 +1,6 @@
 import express from 'express'
 import { getStyleSuggestionsLLM } from './styleService.js'
-import { writeLog } from './logger.js'
+import { recordInteraction, getUserStyleProfile } from './styleHistory.js'
 
 const router = express.Router()
 
@@ -21,23 +21,26 @@ router.post('/suggest', async (req, res) => {
       notes: typeof it.notes === 'string' ? it.notes : ''
     }))
 
-    const suggestions = await getStyleSuggestionsLLM({
-      goal: typeof goal === 'string' ? goal : '',
-      vibe: typeof vibe === 'string' ? vibe : '',
-      items: normalizedItems
-    })
-
     const uid =
       typeof userId === 'string' && userId.trim().length
         ? userId.trim()
         : 'anon'
 
+    const styleProfile = getUserStyleProfile(uid)
+
+    const suggestions = await getStyleSuggestionsLLM({
+      goal: typeof goal === 'string' ? goal : '',
+      vibe: typeof vibe === 'string' ? vibe : '',
+      items: normalizedItems,
+      styleProfile
+    })
+
     res.json({ userId: uid, suggestions })
 
-    writeLog({
+    recordInteraction({
       userId: uid,
-      goal: goal || '',
-      vibe: vibe || '',
+      goal: typeof goal === 'string' ? goal : '',
+      vibe: typeof vibe === 'string' ? vibe : '',
       items: normalizedItems,
       suggestions,
       durationMs: Date.now() - start
