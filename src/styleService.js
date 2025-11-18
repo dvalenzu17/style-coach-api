@@ -1,12 +1,13 @@
 import OpenAI from 'openai'
 
 const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
+  apiKey: process.env.OPENAI_API_KEY,
 })
 
-function buildPrompt({ goal, vibe, items, styleProfile }) {
+function buildPrompt({ goal, vibe, items, styleProfile, weather }) {
   const safeGoal = goal && goal.trim().length ? goal.trim() : 'everyday wear'
-  const safeVibe = vibe && vibe.trim().length ? vibe.trim() : 'casual but put-together'
+  const safeVibe =
+    vibe && vibe.trim().length ? vibe.trim() : 'casual but put-together'
 
   const lines = (items || [])
     .map((it, idx) => {
@@ -27,8 +28,13 @@ function buildPrompt({ goal, vibe, items, styleProfile }) {
     if (Array.isArray(styleProfile.vibes) && styleProfile.vibes.length) {
       parts.push(`prefers vibes: ${styleProfile.vibes.join(', ')}`)
     }
-    if (Array.isArray(styleProfile.categories) && styleProfile.categories.length) {
-      parts.push(`frequently uses categories: ${styleProfile.categories.join(', ')}`)
+    if (
+      Array.isArray(styleProfile.categories) &&
+      styleProfile.categories.length
+    ) {
+      parts.push(
+        `frequently uses categories: ${styleProfile.categories.join(', ')}`
+      )
     }
     if (Array.isArray(styleProfile.colors) && styleProfile.colors.length) {
       parts.push(`leans toward colors: ${styleProfile.colors.join(', ')}`)
@@ -38,14 +44,47 @@ function buildPrompt({ goal, vibe, items, styleProfile }) {
     }
   }
 
-  return `
-You are a modern, neutral fashion stylist. Give clear, realistic outfit guidance the user can wear in everyday life.${profileBlock}
+  let weatherBlock =
+    '\n\nWeather: not provided. Do not assume temperature or conditions.'
+  if (weather && typeof weather === 'object') {
+    const temp =
+      typeof weather.temp === 'number' ? Math.round(weather.temp) : null
+    const feelsLike =
+      typeof weather.feelsLike === 'number'
+        ? Math.round(weather.feelsLike)
+        : null
+    const desc = weather.desc || null
+    const humidity =
+      typeof weather.humidity === 'number' ? weather.humidity : null
+    const bucket = weather.tempBucket || 'mild'
+
+    const parts = []
+    if (desc) parts.push(`description: ${desc}`)
+    if (temp !== null && feelsLike !== null) {
+      parts.push(`temperature: ${temp}°C (feels like ${feelsLike}°C)`)
+    } else if (temp !== null) {
+      parts.push(`temperature: ${temp}°C`)
+    }
+    if (humidity !== null) parts.push(`humidity: ${humidity}%`)
+    parts.push(`comfort bucket: ${bucket} (cold, mild, or hot)`)
+
+    weatherBlock =
+      '\n\nCurrent weather at the user location:\n' +
+      parts.map(p => `- ${p}`).join('\n') +
+      '\nUse this to make outfits realistically comfortable for the conditions.'
+  }
+
+  return (
+    `You are a modern, neutral fashion stylist. Give clear, realistic outfit guidance the user can wear in everyday life.` +
+    profileBlock +
+    weatherBlock +
+    `
 
 Goal: ${safeGoal}
 Vibe: ${safeVibe}
 
 Selected pieces:
-${lines}
+${lines || '- No specific wardrobe items were listed.'}
 
 Voice and tone:
 - Modern, neutral, friendly.
@@ -60,8 +99,8 @@ Output format:
 - No introductions, no paragraphs, no closing remarks.
 - No emojis, no markdown beyond the "- " at the start.
 
-Each line should be a clear action using the selected pieces plus simple basics (plain tee, jeans, blazer, hoodie, simple accessories).
-  `.trim()
+Each line should be a clear action using the selected pieces plus simple basics (plain tee, jeans, blazer, hoodie, simple accessories).`
+  )
 }
 
 function splitIntoSentences(text) {
@@ -78,8 +117,14 @@ function trimSentenceWords(sentence, maxWords = 22) {
   return cut.replace(/[.,;:!?]*$/, '') + '...'
 }
 
-export async function getStyleSuggestionsLLM({ goal, vibe, items, styleProfile }) {
-  const prompt = buildPrompt({ goal, vibe, items, styleProfile })
+export async function getStyleSuggestionsLLM({
+  goal,
+  vibe,
+  items,
+  styleProfile,
+  weather,
+}) {
+  const prompt = buildPrompt({ goal, vibe, items, styleProfile, weather })
 
   const completion = await client.chat.completions.create({
     model: 'gpt-4o-mini',
@@ -87,12 +132,12 @@ export async function getStyleSuggestionsLLM({ goal, vibe, items, styleProfile }
       {
         role: 'system',
         content:
-          'You are a concise, practical fashion stylist. Give direct outfit actions in a modern, neutral tone, no fluff.'
+          'You are a concise, practical fashion stylist. Give direct outfit actions in a modern, neutral tone, no fluff.',
       },
-      { role: 'user', content: prompt }
+      { role: 'user', content: prompt },
     ],
     temperature: 0.7,
-    max_tokens: 220
+    max_tokens: 220,
   })
 
   const text = completion.choices?.[0]?.message?.content || ''
