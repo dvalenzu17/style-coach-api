@@ -36,21 +36,32 @@ async function getUserStyleContext(userId) {
   const fromDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30)
   const fromIso = fromDate.toISOString().slice(0, 10)
 
-  const [logsRes, profileRes] = await Promise.all([
-    supabase
-      .from('outfit_logs')
-      .select('log_date, rating, tags')
-      .eq('user_id', userId)
-      .gte('log_date', fromIso),
-    supabase
-      .from('profiles')
-      .select('fit_preference, color_comfort, no_go_items')
-      .eq('user_id', userId)
-      .maybeSingle(),
-  ])
+  const logsPromise = supabase
+    .from('outfit_logs')
+    .select('log_date, rating, tags')
+    .eq('user_id', userId)
+    .gte('log_date', fromIso)
 
-  const logs = logsRes.data || []
-  const profile = profileRes.data || null
+  let profile = null
+  let logs = []
+
+  try {
+    const logsRes = await logsPromise
+    logs = logsRes.data || []
+  } catch (e) {
+    console.warn('Error loading outfit_logs for style context', e)
+  }
+
+  try {
+    const profileRes = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('id', userId)
+      .maybeSingle()
+    profile = profileRes.data || null
+  } catch (e) {
+    console.warn('Profile query failed, continuing without profile context', e)
+  }
 
   let avgRating = null
   let ratingCount = 0
@@ -95,19 +106,7 @@ async function getUserStyleContext(userId) {
   const lines = []
 
   if (profile) {
-    const { fit_preference, color_comfort, no_go_items } = profile
-    if (fit_preference || color_comfort || (no_go_items && no_go_items.length)) {
-      lines.push('Style profile:')
-      if (fit_preference) {
-        lines.push(`- Fit preference: ${fit_preference}`)
-      }
-      if (color_comfort) {
-        lines.push(`- Color comfort: ${color_comfort}`)
-      }
-      if (Array.isArray(no_go_items) && no_go_items.length) {
-        lines.push(`- Avoid these items: ${no_go_items.join(', ')}`)
-      }
-    }
+    lines.push('Profile row exists for this user (default schema).')
   }
 
   if (logs.length > 0) {
@@ -144,6 +143,7 @@ async function getUserStyleContext(userId) {
     summaryText: lines.join('\n'),
   }
 }
+
 
 function buildPrompt({ goal, vibe, items, context }) {
   const safeGoal = goal && goal.trim().length ? goal.trim() : 'everyday wear'
