@@ -78,15 +78,14 @@ async function getUserStyleContext(userId) {
 
   for (const [tag, count] of Object.entries(tagCounts)) {
     const lower = tag.toLowerCase()
-    const entry = `${tag} (${count}x)`
     if (lower.includes('loved') || lower.includes('perfect')) {
-      positiveSignals.push(entry)
+      if (!positiveSignals.includes(tag)) positiveSignals.push(tag)
     } else if (
       lower.includes('too warm') ||
       lower.includes('too cold') ||
       lower.includes('not confident')
     ) {
-      negativeSignals.push(entry)
+      if (!negativeSignals.includes(tag)) negativeSignals.push(tag)
     }
   }
 
@@ -171,6 +170,7 @@ ${historyBlock}
 Rules:
 - Keep responses short, bullet-based and concrete.
 - Do not use emojis, star icons, or decorative symbols.
+- Do not output counts like "(3x)" after words.
 - If tags like "Too warm" or "Too cold" appear often, adjust layering and fabric weight accordingly.
 - If tags like "Loved" or "Perfect" appear often, lean into those silhouettes, colors and combinations.
 - If there is very little data, make safe, versatile suggestions.
@@ -214,6 +214,7 @@ function parseSuggestions(rawText) {
 
   for (let line of lines) {
     line = line.replace(/^[\-\*•·⭐★\d.)\s]+/, '').trim()
+    line = line.replace(/[⭐★✨🌟•·]/g, '').trim()
     if (!line) continue
     cleaned.push(line)
   }
