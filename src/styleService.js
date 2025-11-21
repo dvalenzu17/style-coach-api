@@ -36,31 +36,18 @@ async function getUserStyleContext(userId) {
   const fromDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30)
   const fromIso = fromDate.toISOString().slice(0, 10)
 
-  const logsPromise = supabase
-    .from('outfit_logs')
-    .select('log_date, rating, tags')
-    .eq('user_id', userId)
-    .gte('log_date', fromIso)
-
-  let profile = null
   let logs = []
 
   try {
-    const logsRes = await logsPromise
+    const logsRes = await supabase
+      .from('outfit_logs')
+      .select('log_date, rating, tags')
+      .eq('user_id', userId)
+      .gte('log_date', fromIso)
+
     logs = logsRes.data || []
   } catch (e) {
     console.warn('Error loading outfit_logs for style context', e)
-  }
-
-  try {
-    const profileRes = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
-      .maybeSingle()
-    profile = profileRes.data || null
-  } catch (e) {
-    console.warn('Profile query failed, continuing without profile context', e)
   }
 
   let avgRating = null
@@ -105,10 +92,6 @@ async function getUserStyleContext(userId) {
 
   const lines = []
 
-  if (profile) {
-    lines.push('Profile row exists for this user (default schema).')
-  }
-
   if (logs.length > 0) {
     lines.push(
       `Recent history: ${logs.length} outfit log${logs.length === 1 ? '' : 's'} in the last 30 days.`
@@ -135,7 +118,7 @@ async function getUserStyleContext(userId) {
 
   if (!lines.length) {
     lines.push(
-      'No usable history or profile found. Suggest outfits based only on the selected pieces, goal, and vibe.'
+      'No usable history found. Suggest outfits based only on the selected pieces, goal, and vibe.'
     )
   }
 
@@ -143,6 +126,7 @@ async function getUserStyleContext(userId) {
     summaryText: lines.join('\n'),
   }
 }
+
 
 
 function buildPrompt({ goal, vibe, items, context }) {
@@ -255,4 +239,8 @@ export async function getSuggestionsForUser({ userId, goal, vibe, items }) {
   }
 
   return suggestions
+}
+
+export async function getStyleSuggestionsLLM({ userId, goal, vibe, items }) {
+  return getSuggestionsForUser({ userId, goal, vibe, items })
 }
