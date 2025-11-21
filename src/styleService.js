@@ -8,10 +8,6 @@ const client = new OpenAI({
 const supabaseUrl = process.env.SUPABASE_URL
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 
-if (!supabaseUrl || !supabaseServiceKey) {
-  console.warn('Supabase env not configured: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing')
-}
-
 const supabase =
   supabaseUrl && supabaseServiceKey
     ? createClient(supabaseUrl, supabaseServiceKey)
@@ -33,7 +29,11 @@ async function getUserStyleContext(userId) {
   }
 
   const now = new Date()
-  const fromDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 30)
+  const fromDate = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() - 30
+  )
   const fromIso = fromDate.toISOString().slice(0, 10)
 
   let logs = []
@@ -94,7 +94,9 @@ async function getUserStyleContext(userId) {
 
   if (logs.length > 0) {
     lines.push(
-      `Recent history: ${logs.length} outfit log${logs.length === 1 ? '' : 's'} in the last 30 days.`
+      `Recent history: ${logs.length} outfit log${
+        logs.length === 1 ? '' : 's'
+      } in the last 30 days.`
     )
   } else {
     lines.push('Recent history: no outfit logs in the last 30 days.')
@@ -106,7 +108,9 @@ async function getUserStyleContext(userId) {
 
   if (positiveSignals.length) {
     lines.push(
-      `Positive tags (things the user tends to like): ${positiveSignals.join(', ')}.`
+      `Positive tags (things the user tends to like): ${positiveSignals.join(
+        ', '
+      )}.`
     )
   }
 
@@ -127,13 +131,12 @@ async function getUserStyleContext(userId) {
   }
 }
 
-
-
 function buildPrompt({ goal, vibe, items, context }) {
   const safeGoal = goal && goal.trim().length ? goal.trim() : 'everyday wear'
-  const safeVibe = vibe && vibe.trim().length ? vibe.trim() : 'casual but put-together'
+  const safeVibe =
+    vibe && vibe.trim().length ? vibe.trim() : 'casual but put-together'
 
-  const lines = items.map((it, idx) => {
+  const lines = (items || []).map((it, idx) => {
     const name = it.name || it.category || `Item ${idx + 1}`
     const cat = it.category ? `(${it.category})` : ''
     const color = it.color ? `, color: ${it.color}` : ''
@@ -162,12 +165,12 @@ User's desired vibe:
 Pieces the user is working with:
 ${itemsBlock}
 
-What you know about this user from their history and profile:
+What you know about this user from their history:
 ${historyBlock}
 
 Rules:
 - Keep responses short, bullet-based and concrete.
-- Respect the user's style profile and avoid "no-go" items or patterns hinted by negative tags.
+- Do not use emojis, star icons, or decorative symbols.
 - If tags like "Too warm" or "Too cold" appear often, adjust layering and fabric weight accordingly.
 - If tags like "Loved" or "Perfect" appear often, lean into those silhouettes, colors and combinations.
 - If there is very little data, make safe, versatile suggestions.
@@ -210,18 +213,18 @@ function parseSuggestions(rawText) {
   const cleaned = []
 
   for (let line of lines) {
-    line = line.replace(/^[-•\d.)\s]+/, '').trim()
+    line = line.replace(/^[\-\*•·⭐★\d.)\s]+/, '').trim()
     if (!line) continue
     cleaned.push(line)
   }
 
-  const finalSuggestions = cleaned
+  const final = cleaned
     .map(s => (typeof s === 'string' ? s.trim() : String(s || '')))
     .filter(s => s.length > 0)
     .map(s => trimSentenceWords(s, 22))
     .slice(0, 5)
 
-  return finalSuggestions
+  return final
 }
 
 export async function getSuggestionsForUser({ userId, goal, vibe, items }) {
@@ -241,6 +244,6 @@ export async function getSuggestionsForUser({ userId, goal, vibe, items }) {
   return suggestions
 }
 
-export async function getStyleSuggestionsLLM({ userId, goal, vibe, items }) {
-  return getSuggestionsForUser({ userId, goal, vibe, items })
+export async function getStyleSuggestionsLLM(args) {
+  return getSuggestionsForUser(args)
 }
