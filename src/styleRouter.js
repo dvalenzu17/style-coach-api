@@ -1,27 +1,30 @@
+// styleRouter.js
 import { Router } from 'express'
-import { getSuggestionsForUser } from './styleService.js'
+import { getStyleSuggestionsLLM } from './styleService.js'
 
 const router = Router()
 
+// POST /api/style/suggest
 router.post('/suggest', async (req, res) => {
   try {
-    const { userId, goal, vibe, items } = req.body || {}
+    const { userId, items, goal, vibe, styleProfile, weather } = req.body || {}
 
-    if (!userId) {
-      return res.status(400).json({ error: 'userId_required' })
-    }
-
-    const suggestions = await getSuggestionsForUser({
+    const { suggestions, meta } = await getStyleSuggestionsLLM({
       userId,
+      items: items || [],
       goal: goal || '',
       vibe: vibe || '',
-      items: Array.isArray(items) ? items : [],
+      styleProfile: styleProfile || null,
+      weather: weather || null,
     })
 
-    res.json({ suggestions })
+    res.json({
+      suggestions,
+      meta: meta || null,
+    })
   } catch (err) {
-    console.error('Error generating style suggestions:', err)
-    res.status(500).json({ error: 'failed_to_generate_suggestions' })
+    console.error('Error in /api/style/suggest', err)
+    res.status(500).json({ error: 'style_suggest_failed' })
   }
 })
 

@@ -25,6 +25,7 @@ async function getUserStyleContext(userId) {
     return {
       summaryText:
         'No database context is available. Suggest outfits based only on the selected pieces, goal, and vibe.',
+      meta: null,
     }
   }
 
@@ -125,8 +126,18 @@ async function getUserStyleContext(userId) {
     )
   }
 
+  const meta =
+    logs.length === 0 && avgRating == null && !positiveSignals.length && !negativeSignals.length
+      ? null
+      : {
+          avgRating: avgRating,
+          leaningInto: positiveSignals.join(', ') || null,
+          avoiding: negativeSignals.join(', ') || null,
+        }
+
   return {
     summaryText: lines.join('\n'),
+    meta,
   }
 }
 
@@ -213,7 +224,7 @@ function parseSuggestions(rawText) {
   const cleaned = []
 
   for (let line of lines) {
-    line = line.replace(/^[\-\*•·⭐★\d.)\s]+/, '').trim()
+    line = line.replace(/^[\s\-•⭐★✦✧*]+/, '').trim()
     line = line.replace(/[⭐★✨🌟•·]/g, '').trim()
     if (!line) continue
     cleaned.push(line)
@@ -228,13 +239,20 @@ function parseSuggestions(rawText) {
   return final
 }
 
-export async function getSuggestionsForUser({ userId, goal, vibe, items }) {
+export async function getSuggestionsForUser({ userId, goal, vibe, items, styleProfile, weather }) {
   if (!userId) {
     throw new Error('userId is required')
   }
 
   const context = await getUserStyleContext(userId)
-  const prompt = buildPrompt({ goal, vibe, items: items || [], context })
+  const prompt = buildPrompt({
+    goal,
+    vibe,
+    items: items || [],
+    context,
+    styleProfile: styleProfile || null,
+    weather: weather || null,
+  })
   const raw = await callModel(prompt)
   const suggestions = parseSuggestions(raw)
 
@@ -242,7 +260,10 @@ export async function getSuggestionsForUser({ userId, goal, vibe, items }) {
     throw new Error('No clean suggestions generated')
   }
 
-  return suggestions
+  return {
+    suggestions,
+    meta: context.meta || null,
+  }
 }
 
 export async function getStyleSuggestionsLLM(args) {

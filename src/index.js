@@ -109,19 +109,22 @@ app.post('/api/style/suggest-weather', async (req, res) => {
   try {
     const { items, goal, vibe, location, styleProfile } = req.body
     const weather = await fetchWeatherForLocation(location)
-    const suggestions = await getStyleSuggestionsLLM({
+
+    const { suggestions, meta } = await getStyleSuggestionsLLM({
       goal: goal || '',
       vibe: vibe || '',
       items: items || [],
       styleProfile: styleProfile || null,
       weather,
     })
-    res.json({ suggestions })
+
+    res.json({ suggestions, meta: meta || null })
   } catch (err) {
     console.error('/api/style/suggest-weather error', err)
     res.status(500).json({ error: 'internal_error' })
   }
 })
+
 
 app.get('/health', (req, res) => {
   res.json({ ok: true })
