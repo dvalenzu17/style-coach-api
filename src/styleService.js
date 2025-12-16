@@ -1,5 +1,7 @@
 import OpenAI from 'openai'
 import { createClient } from '@supabase/supabase-js'
+import { writeLog } from './logger.js'
+import { recordInteraction } from './styleHistory.js'
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -13,207 +15,231 @@ const supabase =
     ? createClient(supabaseUrl, supabaseServiceKey)
     : null
 
-function trimSentenceWords(text, maxWords) {
-  if (!text) return ''
-  const words = String(text).split(/\s+/)
-  if (words.length <= maxWords) return text.trim()
-  return words.slice(0, maxWords).join(' ').replace(/[.,;:!?]*$/, '') + '…'
+const MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini'
+const HISTORY_DAYS = 30
+
+function nowUtc() {
+  return new Date().toISOString()
+}
+
+function toDateDaysAgo(days) {
+  const d = new Date()
+  d.setUTCDate(d.getUTCDate() - days)
+  return d.toISOString().slice(0, 10)
+}
+
+function safeArray(value) {
+  if (!value) return []
+  if (Array.isArray(value)) return value
+  return [value]
+}
+
+function summariseTags(rows) {
+  const tagCounts = {}
+  for (const row of rows) {
+    const tags = safeArray(row.tags)
+    for (const t of tags) {
+      const tag = String(t || '').trim().toLowerCase()
+      if (!tag) continue
+      tagCounts[tag] = (tagCounts[tag] || 0) + 1
+    }
+  }
+  const sorted = Object.entries(tagCounts).sort((a, b) => b[1] - a[1])
+  return sorted.slice(0, 6).map(([tag]) => tag)
+}
+
+function summariseRatings(rows) {
+  const ratings = rows
+    .map(r => (typeof r.rating === 'number' ? r.rating : null))
+    .filter(r => r !== null)
+  if (!ratings.length) return { avgRating: null, count: 0 }
+  const sum = ratings.reduce((a, b) => a + b, 0)
+  const avg = sum / ratings.length
+  return { avgRating: avg, count: ratings.length }
 }
 
 async function getUserStyleContext(userId) {
+  if (!userId) {
+    throw Object.assign(new Error('userId is required'), {
+      code: 'MISSING_USER_ID',
+    })
+  }
   if (!supabase) {
     return {
       summaryText:
-        'No database context is available. Suggest outfits based only on the selected pieces, goal, and vibe.',
-      meta: null,
+        'No usage history available. Suggest versatile outfits based only on the provided items and style profile.',
+      meta: {
+        hasHistory: false,
+        logCount: 0,
+        avgRating: null,
+        topTags: [],
+      },
     }
   }
 
-  const now = new Date()
-  const fromDate = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate() - 30
-  )
-  const fromIso = fromDate.toISOString().slice(0, 10)
+  const fromDate = toDateDaysAgo(HISTORY_DAYS)
 
-  let logs = []
+  const { data, error } = await supabase
+    .from('outfit_logs')
+    .select('log_date,rating,tags')
+    .eq('user_id', userId)
+    .gte('log_date', fromDate)
+    .order('log_date', { ascending: false })
 
-  try {
-    const logsRes = await supabase
-      .from('outfit_logs')
-      .select('log_date, rating, tags')
-      .eq('user_id', userId)
-      .gte('log_date', fromIso)
-
-    logs = logsRes.data || []
-  } catch (e) {
-    console.warn('Error loading outfit_logs for style context', e)
-  }
-
-  let avgRating = null
-  let ratingCount = 0
-  let ratingSum = 0
-  const tagCounts = {}
-
-  for (const log of logs) {
-    if (typeof log.rating === 'number') {
-      ratingCount += 1
-      ratingSum += log.rating
-    }
-    if (Array.isArray(log.tags)) {
-      for (const t of log.tags) {
-        const tag = String(t).trim()
-        if (!tag) continue
-        tagCounts[tag] = (tagCounts[tag] || 0) + 1
-      }
+  if (error) {
+    console.error('Supabase outfit_logs error', error)
+    return {
+      summaryText:
+        'No reliable history due to a data error. Suggest safe, versatile outfits.',
+      meta: {
+        hasHistory: false,
+        logCount: 0,
+        avgRating: null,
+        topTags: [],
+      },
     }
   }
 
-  if (ratingCount > 0) {
-    avgRating = ratingSum / ratingCount
-  }
-
-  const positiveSignals = []
-  const negativeSignals = []
-
-  for (const [tag, count] of Object.entries(tagCounts)) {
-    const lower = tag.toLowerCase()
-    if (lower.includes('loved') || lower.includes('perfect')) {
-      if (!positiveSignals.includes(tag)) positiveSignals.push(tag)
-    } else if (
-      lower.includes('too warm') ||
-      lower.includes('too cold') ||
-      lower.includes('not confident')
-    ) {
-      if (!negativeSignals.includes(tag)) negativeSignals.push(tag)
+  if (!data || !data.length) {
+    return {
+      summaryText:
+        'No recent outfit history. Suggest simple, easy-to-wear outfits that would suit most people.',
+      meta: {
+        hasHistory: false,
+        logCount: 0,
+        avgRating: null,
+        topTags: [],
+      },
     }
   }
 
-  const lines = []
+  const { avgRating, count } = summariseRatings(data)
+  const topTags = summariseTags(data)
 
-  if (logs.length > 0) {
-    lines.push(
-      `Recent history: ${logs.length} outfit log${
-        logs.length === 1 ? '' : 's'
-      } in the last 30 days.`
-    )
-  } else {
-    lines.push('Recent history: no outfit logs in the last 30 days.')
-  }
-
+  const parts = []
+  parts.push(`There are ${count} logged outfits in the last ${HISTORY_DAYS} days.`)
   if (avgRating != null) {
-    lines.push(`Average rating: ${avgRating.toFixed(1)} / 5.`)
+    parts.push(`Average rating is about ${avgRating.toFixed(1)} out of 5.`)
   }
-
-  if (positiveSignals.length) {
-    lines.push(
-      `Positive tags (things the user tends to like): ${positiveSignals.join(
-        ', '
-      )}.`
-    )
+  if (topTags.length) {
+    parts.push(`Frequent feedback tags: ${topTags.join(', ')}.`)
   }
-
-  if (negativeSignals.length) {
-    lines.push(
-      `Negative tags (avoid leaning into these): ${negativeSignals.join(', ')}.`
-    )
-  }
-
-  if (!lines.length) {
-    lines.push(
-      'No usable history found. Suggest outfits based only on the selected pieces, goal, and vibe.'
-    )
-  }
-
-  const meta =
-    logs.length === 0 && avgRating == null && !positiveSignals.length && !negativeSignals.length
-      ? null
-      : {
-          avgRating: avgRating,
-          leaningInto: positiveSignals.join(', ') || null,
-          avoiding: negativeSignals.join(', ') || null,
-        }
+  parts.push(
+    'Respect this history: lean into what worked and avoid repeating what did not.'
+  )
 
   return {
-    summaryText: lines.join('\n'),
-    meta,
+    summaryText: parts.join(' '),
+    meta: {
+      hasHistory: true,
+      logCount: count,
+      avgRating,
+      topTags,
+    },
   }
 }
 
-function buildPrompt({ goal, vibe, items, context }) {
+function summariseStyleProfile(styleProfile) {
+  if (!styleProfile) {
+    return 'Style profile: not specified. Default to flattering, confidence-boosting outfits that are easy to wear.'
+  }
+
+  const lines = []
+  if (styleProfile.bodyType) {
+    lines.push(`Body type: ${String(styleProfile.bodyType)}`)
+  }
+  if (styleProfile.faceShape) {
+    lines.push(`Face shape: ${String(styleProfile.faceShape)}`)
+  }
+  if (styleProfile.skinTone || styleProfile.colorPalette) {
+    lines.push(
+      `Skin tone / colour palette: ${String(
+        styleProfile.skinTone || styleProfile.colorPalette
+      )}`
+    )
+  }
+  if (styleProfile.fitPreference) {
+    lines.push(`Preferred fit: ${String(styleProfile.fitPreference)}`)
+  }
+  if (styleProfile.colourPreference) {
+    lines.push(`Preferred colours: ${String(styleProfile.colourPreference)}`)
+  }
+  const noGo = safeArray(styleProfile.noGo || styleProfile.noGoItems)
+  if (noGo.length) {
+    lines.push(`Avoid: ${noGo.join(', ')}`)
+  }
+
+  if (!lines.length) {
+    return 'Style profile: basic preferences only. Keep outfits comfortable, modern and not too experimental.'
+  }
+
+  return `Style profile: ${lines.join(' | ')}`
+}
+
+function summariseWeather(weather) {
+  if (!weather)
+    return 'Weather: not provided. Assume mild, comfortable conditions.'
+  const parts = []
+  if (weather.tempBucket) {
+    parts.push(`Overall it is ${weather.tempBucket}.`)
+  }
+  if (typeof weather.temp === 'number') {
+    parts.push(`Approx temperature: ${Math.round(weather.temp)}°C.`)
+  }
+  if (weather.description) {
+    parts.push(`Conditions: ${weather.description}.`)
+  }
+  return `Weather context: ${parts.join(
+    ' '
+  )} Focus on pieces that feel appropriate for this temperature and conditions.`
+}
+
+function buildItemsBlock(items) {
+  if (!items || !items.length) {
+    return 'Wardrobe items provided: none. Base your advice on generic but realistic pieces.'
+  }
+
+  const lines = items.map((it, idx) => {
+    const baseName = it.name || it.label || `Item ${idx + 1}`
+    const parts = [baseName]
+    if (it.category) parts.push(`category: ${it.category}`)
+    if (it.color) parts.push(`color: ${it.color}`)
+    if (it.notes) parts.push(`notes: ${it.notes}`)
+    return `- ${parts.join(', ')}`
+  })
+
+  return `Wardrobe items that can be used:\n${lines.join('\n')}`
+}
+
+function buildPrompt({ goal, vibe, items, styleProfile, weather, context }) {
   const safeGoal = goal && goal.trim().length ? goal.trim() : 'everyday wear'
   const safeVibe =
     vibe && vibe.trim().length ? vibe.trim() : 'casual but put-together'
 
-  const lines = (items || []).map((it, idx) => {
-    const name = it.name || it.category || `Item ${idx + 1}`
-    const cat = it.category ? `(${it.category})` : ''
-    const color = it.color ? `, color: ${it.color}` : ''
-    const notes = it.notes ? `, notes: ${it.notes}` : ''
-    return `- ${name} ${cat}${color}${notes}`
-  })
+  const lines = []
 
-  const itemsBlock = lines.length
-    ? lines.join('\n')
-    : '- No specific pieces provided. Suggest a generic outfit within the goal + vibe.'
+  lines.push(`User goal: ${safeGoal}.`)
+  lines.push(`Requested vibe: ${safeVibe}.`)
 
-  const historyBlock =
-    context && context.summaryText
-      ? context.summaryText
-      : 'No historical logs or preferences available.'
+  lines.push(summariseStyleProfile(styleProfile))
+  lines.push(summariseWeather(weather))
 
-  return `
-You are a concise, practical personal stylist. Your job is to help the user style the pieces they selected.
+  if (context && context.summaryText) {
+    lines.push(`Recent outfit history:\n${context.summaryText}`)
+  } else {
+    lines.push('No meaningful outfit history is available.')
+  }
 
-User's goal for this outfit:
-- ${safeGoal}
+  lines.push(buildItemsBlock(items))
 
-User's desired vibe:
-- ${safeVibe}
+  lines.push(
+    'Using only these items and this context, propose 3–5 specific outfit suggestions that match the goal and vibe. Each suggestion should be one concise bullet point, 10–30 words, describing which pieces to combine and any small styling details (e.g. tuck, roll sleeves, add belt). Avoid mentioning items that were not provided.'
+  )
 
-Pieces the user is working with:
-${itemsBlock}
-
-What you know about this user from their history:
-${historyBlock}
-
-Rules:
-- Keep responses short, bullet-based and concrete.
-- Do not use emojis, star icons, or decorative symbols.
-- Do not output counts like "(3x)" after words.
-- If tags like "Too warm" or "Too cold" appear often, adjust layering and fabric weight accordingly.
-- If tags like "Loved" or "Perfect" appear often, lean into those silhouettes, colors and combinations.
-- If there is very little data, make safe, versatile suggestions.
-
-Respond with 3–5 bullet points.
-Each bullet:
-- focuses on a single clear idea (e.g., "Pair the trousers with a tucked-in tee and blazer").
-- should not exceed ~22 words.
-Do not include any preamble or numbering, just the bullet points starting with a dash.
-`.trim()
+  return lines.join('\n\n')
 }
 
-async function callModel(prompt) {
-  const completion = await client.chat.completions.create({
-    model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
-    messages: [
-      {
-        role: 'system',
-        content:
-          'You are a fashion stylist that replies in short, sharp, realistic outfit advice. No fluff, no emojis, no long paragraphs.',
-      },
-      { role: 'user', content: prompt },
-    ],
-    temperature: 0.7,
-    max_tokens: 300,
-  })
-
-  const raw = completion.choices?.[0]?.message?.content || ''
-  return raw
-}
-
-function parseSuggestions(rawText) {
+function cleanSuggestions(rawText) {
   if (!rawText) return []
 
   const lines = rawText
@@ -221,51 +247,113 @@ function parseSuggestions(rawText) {
     .map(l => l.trim())
     .filter(Boolean)
 
-  const cleaned = []
+  const bullets = []
 
   for (let line of lines) {
-    line = line.replace(/^[\s\-•⭐★✦✧*]+/, '').trim()
-    line = line.replace(/[⭐★✨🌟•·]/g, '').trim()
+    line = line.replace(/^[\-•\d\.\)]\s*/, '').trim()
     if (!line) continue
-    cleaned.push(line)
+    if (line.toLowerCase().startsWith('suggestion')) {
+      line = line.replace(/^suggestion\s*\d*[:\-]?\s*/i, '').trim()
+    }
+    if (!line) continue
+    bullets.push(line)
   }
 
-  const final = cleaned
-    .map(s => (typeof s === 'string' ? s.trim() : String(s || '')))
-    .filter(s => s.length > 0)
-    .map(s => trimSentenceWords(s, 22))
-    .slice(0, 5)
-
-  return final
-}
-
-export async function getSuggestionsForUser({ userId, goal, vibe, items, styleProfile, weather }) {
-  if (!userId) {
-    throw new Error('userId is required')
+  const unique = []
+  const seen = new Set()
+  for (const b of bullets) {
+    const key = b.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    unique.push(b)
+    if (unique.length >= 5) break
   }
 
-  const context = await getUserStyleContext(userId)
-  const prompt = buildPrompt({
-    goal,
-    vibe,
-    items: items || [],
-    context,
-    styleProfile: styleProfile || null,
-    weather: weather || null,
-  })
-  const raw = await callModel(prompt)
-  const suggestions = parseSuggestions(raw)
-
-  if (!suggestions.length) {
-    throw new Error('No clean suggestions generated')
-  }
-
-  return {
-    suggestions,
-    meta: context.meta || null,
-  }
+  return unique
 }
 
 export async function getStyleSuggestionsLLM(args) {
-  return getSuggestionsForUser(args)
+  const {
+    userId,
+    items = [],
+    goal = '',
+    vibe = '',
+    styleProfile = null,
+    weather = null,
+  } = args || {}
+
+  const context = await getUserStyleContext(userId)
+
+  const prompt = buildPrompt({
+    goal,
+    vibe,
+    items,
+    styleProfile,
+    weather,
+    context,
+  })
+
+  const systemMessage =
+    "You are a concise, practical personal stylist. You only suggest outfits made from the wardrobe items you are given. You always respect the user's stated preferences, body type, colour comfort and no-go items. Your tone is calm, confident and non-judgemental."
+
+  let completion
+  try {
+    completion = await client.chat.completions.create({
+      model: MODEL,
+      messages: [
+        { role: 'system', content: systemMessage },
+        { role: 'user', content: prompt },
+      ],
+      temperature: 0.7,
+      max_tokens: 400,
+    })
+  } catch (err) {
+    console.error('OpenAI error in getStyleSuggestionsLLM', err)
+    throw Object.assign(new Error('model_error'), { code: 'MODEL_ERROR' })
+  }
+
+  const raw = completion?.choices?.[0]?.message?.content?.trim() || ''
+  const suggestions = cleanSuggestions(raw)
+
+  if (!suggestions.length) {
+    throw Object.assign(new Error('No clean suggestions generated'), {
+      code: 'NO_SUGGESTIONS',
+    })
+  }
+
+  try {
+    writeLog({
+      type: 'style_suggestion',
+      userId: userId || null,
+      ts: nowUtc(),
+      goal,
+      vibe,
+      itemCount: items.length,
+      hasWeather: !!weather,
+    })
+  } catch (e) {
+    console.error('Failed to write style log', e)
+  }
+
+  try {
+    recordInteraction({
+      userId: userId || null,
+      goal,
+      vibe,
+      items,
+      suggestions,
+      weather,
+      createdAt: nowUtc(),
+    })
+  } catch (e) {
+    console.error('Failed to record style interaction', e)
+  }
+
+  const meta = {
+    ...(context.meta || {}),
+    usedStyleProfile: !!styleProfile,
+    usedWeather: !!weather,
+  }
+
+  return { suggestions, meta }
 }
